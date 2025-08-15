@@ -15,7 +15,6 @@ type Scanner struct {
 	ID       uuid.UUID     `json:"id"`
 	Name     string        `json:"name"`
 	DeviceID string        `json:"device_id"` 
-	UserID   uuid.UUID     `json:"user_id,omitempty"`
 	Status   ScannerStatus `json:"status"`
 }
 

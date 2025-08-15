@@ -1,15 +1,26 @@
 package main
 
 import (
-	"github.com/EslamYasser-Dev/Go-AirScanner-Integration/adapter/escl"
-	"github.com/EslamYasser-Dev/Go-AirScanner-Integration/adapter/mdns"
-	"github.com/EslamYasser-Dev/Go-AirScanner-Integration/application"
+	"log"
+
+	"github.com/go-ole/go-ole"
+	"github.com/go-ole/go-ole/oleutil"
 )
 
 func main() {
-	mdns := mdns.NewMDNSScannerDiscovery()
-	escl := escl.NewEsclClient()
+	err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer ole.CoUninitialize()
 
-	useCase := application.NewDiscoverScannersUseCase(mdns, escl)
-	useCase.Execute()
+	devManager, err := oleutil.CreateObject("WIA.DeviceManager")
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer devManager.Release()
+
+
+	
+
 }
