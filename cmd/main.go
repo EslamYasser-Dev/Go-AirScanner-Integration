@@ -2,23 +2,23 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"runtime"
+	"strings"
 
 	"github.com/go-ole/go-ole"
 	"github.com/go-ole/go-ole/oleutil"
 )
 
-// --- Domain Layer ---
-
+/*** Domain ***/
 type Scanner struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
 }
 
-// --- Use Case Layer ---
-
+/*** Use Case ***/
 type ScannerService interface {
 	ListScanners() ([]Scanner, error)
 }
@@ -32,42 +32,75 @@ func NewScannerService(dm *ole.IDispatch) ScannerService {
 }
 
 func (s *scannerService) ListScanners() ([]Scanner, error) {
-	devices := oleutil.MustGetProperty(s.deviceManager, "Devices").ToIDispatch()
-	defer devices.Release()
+	if s == nil || s.deviceManager == nil {
+		return nil, errors.New("scanner service not initialized")
+	}
 
-	count := int(oleutil.MustGetProperty(devices, "Count").Val)
+	// WIA 2.0: DeviceManager.DeviceInfos (NOT "Devices")
+	devInfosVar, err := oleutil.GetProperty(s.deviceManager, "DeviceInfos")
+	if err != nil {
+		return nil, err
+	}
+	devInfos := devInfosVar.ToIDispatch()
+	defer devInfos.Release()
+
+	countVar, err := oleutil.GetProperty(devInfos, "Count")
+	if err != nil {
+		return nil, err
+	}
+	count := int(countVar.Val)
+
 	scanners := make([]Scanner, 0, count)
 
+	// WIA collections are 1-based
 	for i := 1; i <= count; i++ {
-		item := oleutil.MustGetProperty(devices, "Item", i).ToIDispatch()
-		defer item.Release()
+		itemVar, err := oleutil.GetProperty(devInfos, "Item", i)
+		if err != nil {
+			// skip bad entries instead of failing the whole request
+			continue
+		}
+		item := itemVar.ToIDispatch()
 
-		deviceID := oleutil.MustGetProperty(item, "DeviceID").ToString()
-		deviceName := oleutil.MustGetProperty(item, "Properties").ToIDispatch()
-		defer deviceName.Release()
+		id, _ := getString(item, "DeviceID")
+		name := "(unknown)"
 
-		propsCount := int(oleutil.MustGetProperty(deviceName, "Count").Val)
-		var name string
+		// Read Properties -> find "Name"
+		propsVar, err := oleutil.GetProperty(item, "Properties")
+		if err == nil {
+			props := propsVar.ToIDispatch()
 
-		for j := 1; j <= propsCount; j++ {
-			prop := oleutil.MustGetProperty(deviceName, "Item", j).ToIDispatch()
-			defer prop.Release()
+			propsCountVar, err2 := oleutil.GetProperty(props, "Count")
+			if err2 == nil {
+				propsCount := int(propsCountVar.Val)
+				for j := 1; j <= propsCount; j++ {
+					propVar, err3 := oleutil.GetProperty(props, "Item", j)
+					if err3 != nil {
+						continue
+					}
+					prop := propVar.ToIDispatch()
 
-			propName := oleutil.MustGetProperty(prop, "Name").ToString()
-			if propName == "Name" {
-				name = oleutil.MustGetProperty(prop, "Value").ToString()
-				break
+					propName, _ := getString(prop, "Name")
+					if strings.EqualFold(propName, "Name") {
+						if v, err := getString(prop, "Value"); err == nil && v != "" {
+							name = v
+						}
+						prop.Release()
+						break
+					}
+					prop.Release()
+				}
 			}
+			props.Release()
 		}
 
-		scanners = append(scanners, Scanner{ID: deviceID, Name: name})
+		scanners = append(scanners, Scanner{ID: id, Name: name})
+		item.Release()
 	}
 
 	return scanners, nil
 }
 
-// --- Delivery Layer (HTTP) ---
-
+/*** Delivery (HTTP) ***/
 func listScannersHandler(svc ScannerService) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		scanners, err := svc.ListScanners()
@@ -76,42 +109,52 @@ func listScannersHandler(svc ScannerService) http.HandlerFunc {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(scanners)
+		_ = json.NewEncoder(w).Encode(scanners)
 	}
 }
 
-// --- Main (Composition Root) ---
-
+/*** Main (COM init + wiring) ***/
 func main() {
 	if runtime.GOOS != "windows" {
 		log.Fatal("This program works in Windows only")
 	}
 
-	err := ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED)
-	if err != nil {
+	// Many WIA components prefer STA:
+	// ole.COINIT_APARTMENTTHREADED over MULTITHREADED
+	if err := ole.CoInitializeEx(0, ole.COINIT_APARTMENTTHREADED); err != nil {
 		log.Fatal(err)
 	}
 	defer ole.CoUninitialize()
 
-	devManagerUnknown, err := oleutil.CreateObject("WIA.DeviceManager")
+	devMgrObj, err := oleutil.CreateObject("WIA.DeviceManager")
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer devManagerUnknown.Release()
+	defer devMgrObj.Release()
 
-	deviceManager, err := devManagerUnknown.QueryInterface(ole.IID_IDispatch)
+	deviceManager, err := devMgrObj.QueryInterface(ole.IID_IDispatch)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer deviceManager.Release()
 
-	// Create service
-	scannerSvc := NewScannerService(deviceManager)
+	svc := NewScannerService(deviceManager)
 
-	// HTTP server
 	mux := http.NewServeMux()
-	mux.Handle("/scanners", listScannersHandler(scannerSvc))
+	mux.Handle("/scanners", listScannersHandler(svc))
 
 	log.Println("Server running on :2028")
-	http.ListenAndServe(":2028", mux)
+	if err := http.ListenAndServe(":2028", mux); err != nil {
+		log.Fatal(err)
+	}
+}
+
+/*** Helpers ***/
+func getString(obj *ole.IDispatch, name string, args ...interface{}) (string, error) {
+	v, err := oleutil.GetProperty(obj, name, args...)
+	if err != nil {
+		return "", err
+	}
+	defer v.Clear()
+	return v.ToString(), nil
 }
