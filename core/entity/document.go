@@ -11,8 +11,7 @@ import (
 // ID == file name without extension
 type DocumentMetaData struct {
 	ID           uuid.UUID `gorm:"type:uuid;primary_key;" json:"id"`
-	OpreationID  uuid.UUID `gorm:"type:uuid" json:"opreation_id"`
-	CaseID       uuid.UUID `gorm:"type:uuid" json:"case_id"`
+	CaseNumber   string    `gorm:"type:uuid" json:"case_number"`
 	UserID       uuid.UUID `gorm:"type:uuid" json:"user_id"`
 	ScannerID    uuid.UUID `gorm:"type:uuid" json:"scanner_id"`
 	DocumentType uint8     `gorm:"type:tinyint" json:"document_type"` //location on disk, cloud, s3 etc.

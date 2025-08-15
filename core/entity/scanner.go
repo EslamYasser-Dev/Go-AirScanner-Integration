@@ -6,15 +6,14 @@ type ScannerStatus string
 
 const (
 	ScannerStatusAvailable ScannerStatus = "Available"
-	ScannerStatusBusy ScannerStatus = "Busy"
-	ScannerStatusOffline ScannerStatus = "Offline"
+	ScannerStatusBusy      ScannerStatus = "Busy"
+	ScannerStatusOffline   ScannerStatus = "Offline"
 )
-
 
 type Scanner struct {
 	ID       uuid.UUID     `json:"id"`
 	Name     string        `json:"name"`
-	DeviceID string        `json:"device_id"` 
+	DeviceID string        `json:"device_id"`
 	Status   ScannerStatus `json:"status"`
 }
 
